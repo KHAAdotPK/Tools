@@ -1,0 +1,8 @@
+dog barks at night
+cat climbs tree at night
+bird chirps at dawn
+tree sways in wind
+dog runs across field
+cat leaps across field
+bird flies across field
+tree stands tall in field
