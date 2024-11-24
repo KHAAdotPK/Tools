@@ -6,6 +6,27 @@
 #include "main.hh"
 
 template <typename E = double>
+void calculate_relative_error(Collective<E>& gradient_W1, Collective<E>& numerical_gradient, Collective<double>& relative_error) throw (ala_exception)
+{
+    if (!(gradient_W1.getShape() == numerical_gradient.getShape()) && (gradient_W1.getShape() == relative_error.getShape()))
+    {
+        throw ala_exception("relative_error() Error: Mismatch in the shapes of matrices given as arguments.");
+    }
+
+    for (cc_tokenizer::string_character_traits<char>::size_type i = 0; i < relative_error.getShape().getDimensionsOfArray().getNumberOfInnerArrays(); i++)
+    {
+        for (cc_tokenizer::string_character_traits<char>::size_type j = 0; j < relative_error.getShape().getNumberOfColumns(); j++)
+        {
+            E numerator = std::fabs(gradient_W1[i*numerical_gradient.getShape().getNumberOfColumns() + j] - numerical_gradient[i*gradient_W1.getShape().getNumberOfColumns() + j]);
+            E denominator = std::fabs(gradient_W1[i*numerical_gradient.getShape().getNumberOfColumns() + j]) + std::fabs(numerical_gradient[i*gradient_W1.getShape().getNumberOfColumns() + j]) + EPSILON_SMALL_PERTURBATION_FOR_RELATIVE_ERROR; 
+
+            relative_error[i*relative_error.getShape().getNumberOfColumns() + j] = numerator/denominator;     
+        }
+    }
+
+}
+
+template <typename E = double>
 E calculate_loss(Collective<E>& W1_epsilon, Collective<E>& W2, WORDPAIRS_PTR pair, bool verbose = false) throw (ala_exception)
 {
     E loss = 0;
@@ -64,10 +85,10 @@ void numerical_gradient(Collective<E>& W1, Collective<E>& W2, Collective<E>& NG,
     {
         for (cc_tokenizer::string_character_traits<char>::size_type j = 0; j < W1.getShape().getNumberOfColumns(); j++)
         {
-            E original_value = W1[i*SKIP_GRAM_EMBEDDNG_VECTOR_SIZE + j];
+            E original_value = W1[i*W1.getShape().getNumberOfColumns() + j];
 
             // Perturb positively
-            W1[i*SKIP_GRAM_EMBEDDNG_VECTOR_SIZE + j] = original_value + EPSILON_SMALL_PERTURBATION; 
+            W1[i*W1.getShape().getNumberOfColumns() + j] = original_value + EPSILON_SMALL_PERTURBATION_FOR_NUMERICAL_GRADIENT; 
             try
             {
                 loss_plus = calculate_loss<E>(W1, W2, pair);
@@ -78,7 +99,7 @@ void numerical_gradient(Collective<E>& W1, Collective<E>& W2, Collective<E>& NG,
             }
 
             // Perturb negatively
-            W1[i*SKIP_GRAM_EMBEDDNG_VECTOR_SIZE + j] = original_value - EPSILON_SMALL_PERTURBATION; 
+            W1[i*W1.getShape().getNumberOfColumns() + j] = original_value - EPSILON_SMALL_PERTURBATION_FOR_NUMERICAL_GRADIENT; 
             try
             {
                 loss_minus = calculate_loss<E>(W1, W2, pair);
@@ -88,18 +109,20 @@ void numerical_gradient(Collective<E>& W1, Collective<E>& W2, Collective<E>& NG,
                 throw ala_exception(cc_tokenizer::String<char>("numerical_gradient() -> ") + e.what()); 
             }
                         
-            NG[i*SKIP_GRAM_EMBEDDNG_VECTOR_SIZE + j] = (loss_plus - loss_minus) / (2 * EPSILON_SMALL_PERTURBATION); 
+            NG[i*NG.getShape().getNumberOfColumns() + j] = (loss_plus - loss_minus) / (2 * EPSILON_SMALL_PERTURBATION_FOR_NUMERICAL_GRADIENT); 
                         
-            W1[i*SKIP_GRAM_EMBEDDNG_VECTOR_SIZE + j] = original_value;            
+            W1[i*W1.getShape().getNumberOfColumns() + j] = original_value;
             loss_plus = 0;
             loss_minus = 0;
         }
-    }    
+    }
+
+    // Compare numerical_gradient with backpropagated gradient_W1    
 }
 
 int main(int argc, char* argv[])
 {
-    ARG arg_corpus, arg_help, arg_input, arg_verbose, arg_ng;
+    ARG arg_corpus, arg_help, arg_input, arg_verbose, arg_ng, arg_re;
     cc_tokenizer::String<char> data;
     CORPUS corpora;
     cc_tokenizer::csv_parser<cc_tokenizer::String<char>, char> argsv_parser(cc_tokenizer::String<char>(COMMAND));
@@ -125,6 +148,7 @@ int main(int argc, char* argv[])
     FIND_ARG(argv, argc, argsv_parser, "--input", arg_input);
     FIND_ARG(argv, argc, argsv_parser, "verbose", arg_verbose);
     FIND_ARG(argv, argc, argsv_parser, "--output", arg_ng);
+    FIND_ARG(argv, argc, argsv_parser, "re", arg_re);
 
     if (arg_ng.i)
     {
@@ -255,11 +279,56 @@ int main(int argc, char* argv[])
 
     if (arg_verbose.i)
     {
+        std::cout<< "Dimensions NG(Numerical Gradients) = " << NG.getShape().getNumberOfColumns() <<"x" << NG.getShape().getDimensionsOfArray().getNumberOfInnerArrays() << std::endl;
+
         for (cc_tokenizer::string_character_traits<char>::size_type i = 0; i < NG.getShape().getN(); i++)
         {
             std::cout<< NG[i] << ", ";
         }
+
         std::cout<< std::endl;
+    }
+
+    if (arg_re.i)
+    {
+        cc_tokenizer::String<char> file_name;
+
+        FIND_ARG_BLOCK(argv, argc, argsv_parser, arg_re);
+
+        if (arg_re.argc)
+        {
+            file_name = cc_tokenizer::String<char>(argv[arg_re.i + 1]);
+        }
+        else
+        {
+            file_name = cc_tokenizer::String<char>(DEFAULT_RELATIVE_ERROR_FILE_NAME);
+        }
+
+        // Relative Error
+        Collective<double> RE = Numcy::zeros(*(W1.getShape().copy()));
+
+        try
+        {        
+            calculate_relative_error(W1, NG, RE);
+
+            if (arg_verbose.i)
+            {
+                std::cout<< "Dimensions RE(Relative Error) = " << RE.getShape().getNumberOfColumns() <<"x" << RE.getShape().getDimensionsOfArray().getNumberOfInnerArrays() << std::endl;
+
+                for (cc_tokenizer::string_character_traits<char>::size_type i = 0; i < RE.getShape().getN(); i++)
+                {
+                    std::cout<< RE[i] << ", ";
+                }
+
+                std::cout<< std::endl;
+            }
+
+            WRITE_W_BIN(RE, file_name, double);
+        }
+        catch (ala_exception& e)
+        {
+            std::cerr<< "main() -> " << e.what() << std::endl;
+        }
     }
 
     return 0;

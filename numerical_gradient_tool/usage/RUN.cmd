@@ -1,1 +1,1 @@
-./ngt.exe corpus input.txt --input w1p1800.dat w2p1800.dat --output NG.dat verbose
+.\ngt.exe corpus INPUT.txt --input w1p1800.dat w2p1800.dat --output NG.dat verbose re RE.dat
